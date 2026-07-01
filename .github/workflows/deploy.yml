@@ -1,48 +1,47 @@
-name: CI/CD Backend Ventas
+name: CI/CD Backend Ventas - AWS ECS
 
 on:
   push:
     branches:
-      - deploy
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: innovatech-backend
+  ECS_CLUSTER: innovatech-cluster
+  ECS_SERVICE: innovatech-backend-service
 
 jobs:
   build-push-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout codigo
-        uses: actions/checkout@v3
+      - name: Checkout código
+        uses: actions/checkout@v4
 
-      - name: Login a Docker Hub
-        uses: docker/login-action@v3
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build y Push imagen
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
+      - name: Login a Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Deploy en EC2
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          use_insecure_cipher: true
-          script: |
-            docker pull ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
-            docker stop back_ventas || true
-            docker rm back_ventas || true
-            docker run -d \
-              --name back_ventas \
-              --network host \
-              -e DB_ENDPOINT=localhost \
-              -e DB_PORT=3306 \
-              -e DB_NAME=ventas \
-              -e DB_USERNAME=root \
-              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-              ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
+      - name: Build, tag y push imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Forzar nuevo despliegue en ECS
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --force-new-deployment \
+            --region $AWS_REGION
